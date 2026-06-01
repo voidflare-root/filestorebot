@@ -3,24 +3,20 @@ import telebot
 from telebot import types
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "PASTE_BOT_TOKEN")
-ADMIN_IDS = [123456789]  # apna Telegram ID dalo
+ADMIN_IDS = [123456789]  # apna Telegram ID
 
 bot = telebot.TeleBot(BOT_TOKEN)
-
 BOT_USERNAME = bot.get_me().username
 
 DB_FILE = "files.json"
 CHANNEL_FILE = "channels.json"
 BAN_FILE = "bans.json"
 
-sessions = {}
 admin_state = {}
 pending_links = {}
 
 bot.set_my_commands([
     types.BotCommand("start", "Bot Start"),
-    types.BotCommand("genlink", "Multiple file store link"),
-    types.BotCommand("done", "Generate share link"),
     types.BotCommand("settings", "Admin Settings"),
     types.BotCommand("ban", "Ban User"),
     types.BotCommand("unban", "Unban User")
@@ -48,8 +44,8 @@ def is_banned(user_id):
 def load_channels():
     return load_json(CHANNEL_FILE, [])
 
-def save_channels(channels):
-    save_json(CHANNEL_FILE, channels)
+def save_channels(data):
+    save_json(CHANNEL_FILE, data)
 
 def is_joined(user_id):
     channels = load_channels()
@@ -63,27 +59,13 @@ def is_joined(user_id):
                 return False
         except:
             return False
-
     return True
 
 def join_buttons():
     markup = types.InlineKeyboardMarkup()
-
     for ch in load_channels():
-        markup.add(
-            types.InlineKeyboardButton(
-                f"📢 Join {ch['name']}",
-                url=ch["link"]
-            )
-        )
-
-    markup.add(
-        types.InlineKeyboardButton(
-            "✅ Joined / Check",
-            callback_data="check_join"
-        )
-    )
-
+        markup.add(types.InlineKeyboardButton(f"📢 Join {ch['name']}", url=ch["link"]))
+    markup.add(types.InlineKeyboardButton("✅ Joined / Check", callback_data="check_join"))
     return markup
 
 def send_join_message(chat_id):
@@ -109,19 +91,12 @@ def send_file(chat_id, file_id, file_type):
 
 def send_stored_file(chat_id, code):
     db = load_json(DB_FILE, {})
-
     if code not in db:
         bot.send_message(chat_id, "❌ File nahi mili ya link galat hai.")
         return
 
     data = db[code]
-
-    if data["type"] == "multiple":
-        bot.send_message(chat_id, f"✅ {len(data['files'])} files bhej raha hoon...")
-        for f in data["files"]:
-            send_file(chat_id, f["file_id"], f["type"])
-    else:
-        send_file(chat_id, data["file_id"], data["type"])
+    send_file(chat_id, data["file_id"], data["type"])
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -130,9 +105,11 @@ def start(message):
 
     bot.send_message(
         message.chat.id,
+        f"👻 Welcome to File Store Bot\n\n"
         f"👤 Name: {user.first_name or 'No Name'}\n"
         f"🔰 Username: {username}\n"
-        f"🆔 ID: `{user.id}`",
+        f"🆔 ID: `{user.id}`\n\n"
+        f"📁 File upload karo, bot turant share link dega.",
         parse_mode="Markdown"
     )
 
@@ -146,38 +123,26 @@ def start(message):
     if code:
         pending_links[user.id] = code
 
-    if not is_joined(user.id):
-        send_join_message(message.chat.id)
-        return
+        if not is_joined(user.id):
+            send_join_message(message.chat.id)
+            return
 
-    if code:
         send_stored_file(message.chat.id, code)
-    else:
-        bot.send_message(
-            message.chat.id,
-            "👻 File Store Bot\n\n"
-            "Single file bhejo ya multiple files ke liye /genlink use karo."
-        )
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_join")
 def check_join(call):
     if not is_joined(call.from_user.id):
-        bot.answer_callback_query(
-            call.id,
-            "❌ Pehle sabhi channels join karo.",
-            show_alert=True
-        )
+        bot.answer_callback_query(call.id, "❌ Pehle sabhi channels join karo.", show_alert=True)
         return
 
     bot.answer_callback_query(call.id, "✅ Verified")
 
     code = pending_links.get(call.from_user.id)
-
     if code:
         send_stored_file(call.message.chat.id, code)
         pending_links.pop(call.from_user.id, None)
     else:
-        bot.send_message(call.message.chat.id, "✅ Verified! Ab file link dubara open karo.")
+        bot.send_message(call.message.chat.id, "✅ Verified!")
 
 @bot.chat_join_request_handler()
 def approve_join_request(request):
@@ -186,55 +151,8 @@ def approve_join_request(request):
     except:
         pass
 
-@bot.message_handler(commands=["genlink"])
-def genlink(message):
+def store_file_and_link(message, file_id, file_type, file_name):
     if is_banned(message.from_user.id):
-        return
-
-    sessions[str(message.from_user.id)] = []
-    bot.reply_to(message, "📁 Multiple files bhejo.\n\nSab file bhejne ke baad /done bhejo.")
-
-@bot.message_handler(commands=["done"])
-def done(message):
-    user_id = str(message.from_user.id)
-
-    if user_id not in sessions or len(sessions[user_id]) == 0:
-        bot.reply_to(message, "❌ Pehle /genlink karo aur files bhejo.")
-        return
-
-    db = load_json(DB_FILE, {})
-    code = make_code()
-
-    db[code] = {
-        "type": "multiple",
-        "files": sessions[user_id],
-        "user_id": user_id
-    }
-
-    save_json(DB_FILE, db)
-    del sessions[user_id]
-
-    link = f"https://t.me/{BOT_USERNAME}?start={code}"
-
-    bot.reply_to(
-        message,
-        f"✅ Multiple files store ho gayi!\n\n"
-        f"🔗 Share Link:\n{link}"
-    )
-
-def save_session_or_single(message, file_id, file_type, file_name):
-    if is_banned(message.from_user.id):
-        return
-
-    user_id = str(message.from_user.id)
-
-    if user_id in sessions:
-        sessions[user_id].append({
-            "file_id": file_id,
-            "type": file_type,
-            "file_name": file_name
-        })
-        bot.reply_to(message, f"✅ Added: {file_name}\nTotal: {len(sessions[user_id])}")
         return
 
     db = load_json(DB_FILE, {})
@@ -244,33 +162,38 @@ def save_session_or_single(message, file_id, file_type, file_name):
         "type": file_type,
         "file_id": file_id,
         "file_name": file_name,
-        "user_id": user_id
+        "user_id": str(message.from_user.id)
     }
 
     save_json(DB_FILE, db)
 
     link = f"https://t.me/{BOT_USERNAME}?start={code}"
-    bot.reply_to(message, f"✅ File store ho gayi!\n\n🔗 Share Link:\n{link}")
+    bot.reply_to(
+        message,
+        f"✅ File store ho gayi!\n\n"
+        f"📄 File: {file_name}\n"
+        f"🔗 Share Link:\n{link}"
+    )
 
 @bot.message_handler(content_types=["document"])
 def document(message):
-    save_session_or_single(message, message.document.file_id, "document", message.document.file_name)
+    store_file_and_link(message, message.document.file_id, "document", message.document.file_name)
 
 @bot.message_handler(content_types=["photo"])
 def photo(message):
-    save_session_or_single(message, message.photo[-1].file_id, "photo", "photo.jpg")
+    store_file_and_link(message, message.photo[-1].file_id, "photo", "photo.jpg")
 
 @bot.message_handler(content_types=["video"])
 def video(message):
-    save_session_or_single(message, message.video.file_id, "video", "video.mp4")
+    store_file_and_link(message, message.video.file_id, "video", "video.mp4")
 
 @bot.message_handler(content_types=["audio"])
 def audio(message):
-    save_session_or_single(message, message.audio.file_id, "audio", "audio.mp3")
+    store_file_and_link(message, message.audio.file_id, "audio", "audio.mp3")
 
 @bot.message_handler(content_types=["voice"])
 def voice(message):
-    save_session_or_single(message, message.voice.file_id, "voice", "voice.ogg")
+    store_file_and_link(message, message.voice.file_id, "voice", "voice.ogg")
 
 @bot.message_handler(commands=["settings"])
 def settings(message):
@@ -292,7 +215,6 @@ def settings_buttons(call):
 
     if call.data == "add_channel":
         admin_state[call.from_user.id] = "waiting_channel"
-
         bot.send_message(
             call.message.chat.id,
             "📢 Channel add karo:\n\n"
@@ -301,14 +223,12 @@ def settings_buttons(call):
             "Public:\n"
             "`My Channel | @mychannel | https://t.me/mychannel`\n\n"
             "Private:\n"
-            "`Private Channel | -1001234567890 | https://t.me/+abcd1234`\n\n"
-            "⚠️ Private channel me bot admin hona chahiye.",
+            "`Private Channel | -1001234567890 | https://t.me/+abcd1234`",
             parse_mode="Markdown"
         )
 
     elif call.data == "list_channel":
         channels = load_channels()
-
         if not channels:
             bot.send_message(call.message.chat.id, "❌ Koi channel add nahi hai.")
             return
@@ -321,63 +241,42 @@ def settings_buttons(call):
 
     elif call.data == "delete_channel":
         admin_state[call.from_user.id] = "delete_channel"
-        bot.send_message(call.message.chat.id, "🗑 Delete number bhejo.\nExample: `1`", parse_mode="Markdown")
+        bot.send_message(call.message.chat.id, "🗑 Delete number bhejo. Example: `1`", parse_mode="Markdown")
 
     elif call.data == "total_files":
         db = load_json(DB_FILE, {})
-        bot.send_message(call.message.chat.id, f"📊 Total stored links: {len(db)}")
+        bot.send_message(call.message.chat.id, f"📊 Total stored files: {len(db)}")
 
 @bot.message_handler(func=lambda m: m.from_user.id in admin_state)
 def admin_input(message):
-    if not is_admin(message.from_user.id):
-        return
-
     state = admin_state.get(message.from_user.id)
 
     if state == "waiting_channel":
         try:
             name, chat_id, link = [x.strip() for x in message.text.split("|")]
-
             if chat_id.startswith("-100"):
                 chat_id = int(chat_id)
 
             channels = load_channels()
-            channels.append({
-                "name": name,
-                "chat_id": chat_id,
-                "link": link
-            })
-
+            channels.append({"name": name, "chat_id": chat_id, "link": link})
             save_channels(channels)
+
             admin_state.pop(message.from_user.id, None)
-
             bot.reply_to(message, "✅ Channel add ho gaya.")
-
         except:
-            bot.reply_to(
-                message,
-                "❌ Format galat hai.\n\n"
-                "Use:\n"
-                "Channel Name | chat_id | invite_link"
-            )
+            bot.reply_to(message, "❌ Format galat hai.")
 
     elif state == "delete_channel":
         try:
             index = int(message.text.strip()) - 1
             channels = load_channels()
-
-            if index < 0 or index >= len(channels):
-                bot.reply_to(message, "❌ Number galat hai.")
-                return
-
             removed = channels.pop(index)
             save_channels(channels)
+
             admin_state.pop(message.from_user.id, None)
-
             bot.reply_to(message, f"✅ Deleted: {removed['name']}")
-
         except:
-            bot.reply_to(message, "❌ Sirf number bhejo.")
+            bot.reply_to(message, "❌ Number galat hai.")
 
 @bot.message_handler(commands=["ban"])
 def ban(message):
@@ -392,7 +291,6 @@ def ban(message):
     bans = load_json(BAN_FILE, {})
     bans[parts[1]] = True
     save_json(BAN_FILE, bans)
-
     bot.reply_to(message, "🚫 User banned.")
 
 @bot.message_handler(commands=["unban"])
@@ -408,7 +306,6 @@ def unban(message):
     bans = load_json(BAN_FILE, {})
     bans.pop(parts[1], None)
     save_json(BAN_FILE, bans)
-
     bot.reply_to(message, "✅ User unbanned.")
 
 print(f"Bot started: @{BOT_USERNAME}")
